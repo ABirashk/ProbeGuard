@@ -1,0 +1,389 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fl-tabular"
+version = "1.0.0"
+description = "ProbeGuard robust aggregation for Flower federated learning"
+license = "Apache-2.0"
+dependencies = [
+    "flwr[simulation]>=1.24.0",
+    "torch==2.8.0",
+    "scikit-learn==1.7.1",
+    "pandas>=2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["fltabular"]
+
+[tool.flwr.app]
+publisher = "flwrlabs"
+
+[tool.flwr.app.components]
+serverapp = "fltabular.server_app:app"
+clientapp = "fltabular.client_app:app"
+
+# ========================================================== app config ========================================================== #
+
+[tool.flwr.app.config]
+
+# -----------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------- FL Setting --------------------------------------------------------------
+
+num-server-rounds = 200
+num_clients = 100
+learning_rate = 0.001      
+local_epochs = 3          
+
+use_global_scaler = true
+
+fraction-fit = 0.4
+fraction-evaluate = 1.0
+
+# ---------------------------------------------------------------------
+# ------------------------ Dataset selection --------------------------
+
+dataset_name = "can_mirgu"        # covertype | pendigits | can_mirgu | ciciov2024
+# dataset_dir = "data/"
+dataset_max_samples = 6000        # 0 = use all available CSV rows for clients
+label_column = "label"            # if your CSV uses a different name, change this
+num_classes = 0                   # 0 = infer automatically; set only if you must
+dirichlet_alpha = 0.5  # 0.5      # smaller => more non-IID    # 0.5
+min_partition_size = 10
+test_fraction = 0.7            
+batch_size = 32
+seed = 42
+torch_deterministic = true
+
+# ---------------------------------------------------------------------
+# ------------------------- Attack selection --------------------------
+
+attack_type = "FeaturePoison1"    # RandScaling, Trim, FedIMP, PoisonedFL, LabelFlip, ALIE, IPM, CleanLabel, FeaturePoison1, FeaturePoison2, SamplePoison, InvertedLoss, BoundaryLabelFlip
+
+Malicious-Client-Percentage = 0.5    
+
+# Optional (deterministic per-round) range for malicious percentage.
+# If provided, the server picks a deterministic value in [min, max] each round.
+Malicious-Client-Percentage-min = 0.1    
+Malicious-Client-Percentage-max = 0.5    
+
+
+# ---------------------------------------------------------------------
+# ---------------------- Aggregation selection ------------------------
+# "no-attack" uses FedAvg and forces all three malicious-client percentages
+# to 0.0 at runtime, regardless of the values above or attack_type.
+
+aggregation_method = "probeguard"       # probeguard | probeguard-ema | no-attack | fedavg | median | trimmed_mean | krum |  ... 
+                                        # multi_krum | fltrust | shieldfl | dnc | feddmc | gas | sdea | oracle_drop
+
+# ====================================================================================================================================================== #
+# -------------------------------------------------------- Agg Methods' hyperparams --------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------------------------------------------------
+# ProbeGuard: probe-based robust aggregation.
+# aggregation_method="probeguard" uses the median reference;
+# aggregation_method="probeguard-ema" uses an EMA of coordinate-wise medians.
+# probeguard_reference_use_benign_median controls whether only benign clients contribute.
+# Modes: random (default), oracle (simulation upper bound), update, none.
+# Local methods: fedavg, fedprox (default), scaffold.
+probeguard_client_method = "fedprox"
+fedprox_mu = 0.1
+
+# Phase 1: persistent, bounded-uniform random probe bank + MAD detection.
+probeguard_warmup_rounds = 0
+probeguard_refresh_every = 10                    # Probe-bank refresh schedule
+probeguard_probe_bank_size = 60
+probeguard_probe_refresh = 20
+probeguard_bounds_low = -3.0
+probeguard_bounds_high = 3.0
+probeguard_use_data_bounds = true
+probeguard_data_bounds_clip = 8.0
+probeguard_suspect_max = 20
+probeguard_mad_alpha = 1.0
+probeguard_probe_mad_mode = "both"
+probeguard_probe_normalize_per_probe = false
+probeguard_probe_scale_floor_ratio = 0.3
+probeguard_probe_threshold_normalized_ranking = false
+probeguard_phase1_hybrid_update = true
+probeguard_phase1_hybrid_probe_weight = 0.5
+probeguard_top_frac = 0.06
+probeguard_use_kmeans = true
+probeguard_phase1_mode = "Random"                # Random | Oracle | update | none
+probeguard_reference_ema_beta = 0.9
+probeguard_reference_use_benign_median = false
+
+# Phase 2: trust-weighting and sanitization.
+probeguard_trust_only_suspicious = true
+probeguard_trust_use_cos = true
+probeguard_trust_use_norm = true
+probeguard_trust_use_ortho = true
+probeguard_trust_use_suspect_weight = false
+probeguard_sanitize_only_suspicious = false
+probeguard_sanitize_use_cone = true
+probeguard_sanitize_use_norm_clip = true
+probeguard_trust_cos_tau = 0.0
+probeguard_trust_cos_gamma = 5.0
+probeguard_trust_norm_cap = 0.0
+probeguard_trust_norm_cap_mult = 1.5
+probeguard_trust_norm_lambda = 1.0
+probeguard_trust_ortho_lambda = 2.0
+probeguard_suspect_weight = 0.1
+probeguard_sanitize_cone_deg = 60.0
+probeguard_sanitize_norm_cap = 0.0
+probeguard_sanitize_norm_cap_mult = 1.0
+probeguard_use_mad = true
+probeguard_cluster_method = "none"
+probeguard_iforest_contamination = -1.0
+probeguard_pca_var = 0.98
+probeguard_probe_feature_mode = "global_top3_logits"
+probeguard_topk_logits = 12                             # -1 uses all model output classes
+
+# -----------------------------------------------------------------------------------------------------------------------
+# GAS (ICML 2023) -- use aggregation_method = "gas".
+# gas_f=-1 uses the configured *maximum* malicious fraction (not oracle IDs);
+# at exactly 50%, f is capped below n/2 as required by the method.
+# The reference AGR acts on randomly split flattened client model DELTAS.
+gas_p = 1000                               # Random coordinate groups (paper code: 1000)
+gas_f =  -1                                # -1: conservative maximum-based f, or set fixed f
+gas_base_agr = "dnc"                       # median | trimmed_mean | multi_krum | dnc
+
+# GAS(DnC)-ONLY parameters; do not inherit standalone dnc_* values.
+# Covertype MLP with gas_p=1000 has small groups (about 15-16 coordinates).
+# b=2000 uses every coordinate of each group; 1 iteration avoids redundant SVDs.
+# c=1.0 filters ceil(c*f) updates *within each group*. GAS then selects n-f clients.
+# Valid starting point for 40 participating clients with up to 50% adversaries;
+# these values are not claimed to be optimal for every dataset or attack.
+gas_dnc_c = 1.0      
+gas_dnc_niters = 1   
+gas_dnc_b = 2000     
+
+# Optional alternative to test separately, not the primary configuration:
+# gas_p = 200; gas_dnc_b = 32; gas_dnc_niters = 2
+# (set those on separate TOML lines, replacing the active definitions above).
+
+# ----------------------------------------------------------------------------------
+
+# SDEA (ICML 2024) -- use aggregation_method = "sdea".
+# 'unused' gives unlabeled held-out TRAIN examples disjoint from clients/root.
+# This is an adaptation; original SDEA uses unrelated, real public inputs.
+# 'external_csv' is preferred for a paper-matched public-data experiment.
+# Never use random noise as an assumed paper-faithful public dataset.
+sdea_public_source = "unused"       # unused | external_csv
+sdea_public_path = ""               # CSV path when source=external_csv
+sdea_public_label_column = ""       # drop this column (do not use labels)
+sdea_public_pretransformed = false  # true only if CSV is already normalized
+sdea_public_size = 2000  # 512      # FIXED unlabeled examples shared across rounds
+sdea_public_epochs = 20             # paper implementation: 20 optimization epochs
+sdea_public_batch_size = 64         # paper implementation: 64
+sdea_public_lr = 0.005              # paper implementation: 0.005
+sdea_use_cc = true                  # FINCH-first-partition cooperative clustering
+sdea_device = "cpu"                 # cpu | cuda; cpu reproducibility recommended
+
+# -----------------------------------------------------------------------------------------------------------------------
+# --------- Defense hyperparams -----------------------------------------------------------------------------------------
+
+trim_ratio = 0.4                    # for trimmed_mean (drop 20% lowest & 20% highest)  0.4
+krum_f = -1                         # Byzantine count; -1 means "derive from Malicious-Client-Percentage"
+multi_krum_m = 24                   # number of selected updates to average in Multi-Krum
+
+# -----------------------------------------------------------------------------------------------------------------------
+# FLTrust ---------------------------------------------------------------------------------------------------------------
+
+fltrust_root_partition = 0          # which partition-id to use as the server trusted data
+fltrust_root_epochs = 5
+fltrust_root_lr = 0.001
+fltrust_cos_clip = 0.0              # ReLU(cosine): 0.0 is standard (ignore negative similarity)
+
+# FLTrust root subset settings
+fltrust_root_size = 50              # half of typical client shard size
+fltrust_root_seed_offset = 12345    # makes root sampling deterministic
+
+fltrust_root_mode = "dirichlet"
+fltrust_root_alpha = 1.0         
+fltrust_root_min_per_class = 3    
+
+# -----------------------------------------------------------------------------------------------------------------------
+# DnC -------------------------------------------------------------------------------------------------------------------
+
+dnc_f =  -1  
+dnc_c =  1.0  
+dnc_niters = 3   
+dnc_b =  2000  
+
+# -----------------------------------------------------------------------------------------------------------------------
+# FedDMC ----------------------------------------------------------------------------------------------------------------
+
+feddmc_pca_dim = 5
+feddmc_min_cluster_size = 2
+feddmc_ema_alpha = 0.8
+feddmc_trust_threshold = 0.5
+
+# ====================================================================================================================================================== #
+# -------------------------------------------------------- Attack Methods' hyperparams -----------------------------------------------------------------
+
+# -----------------------------------------------------------------------------------------------------------------------
+# SignFlip --------------------------------------------------------------------------------------------------------------
+
+signflip_gamma = 5.0          # ?w' = -gamma * ?w
+
+# -----------------------------------------------------------------------------------------------------------------------
+# ALIE (same-round, server-side) ----------------------------------------------------------------------------------
+
+alie_z = -1.0                 # ALIE: if >0 use this z, else compute z_max from n,f
+
+# -----------------------------------------------------------------------------------------------------------------------
+# IPM (same-round, server-side) -------------------------------------------------------------------------
+
+ipm_gamma = 20.0              # IPM strength (see papers; often 10~20)
+ipm_norm_match = true         # if true, match benign avg L2 norm and scale by ipm_gamma
+
+# -----------------------------------------------------------------------------------------------------------------------
+# LabelFlip -------------------------------------------------------------------------------------------------------------
+
+# Data-poisoning: flip labels on malicious clients' local TRAIN data (test stays clean).
+label_flip_rate = 0.7                          # fraction of local training labels to flip (0..1)
+label_flip_mode = "cyclic"                     # "random" | "cyclic" | "targeted" | "mapping"
+label_flip_target = 0                          # used when mode="targeted"
+label_flip_mapping = ""                        # optional mapping, e.g. '{"0":1,"1":0}' or '0:1,1:0'
+
+# -----------------------------------------------------------------------------------------------------------------------
+# CleanLabel ------------------------------------------------------------------------------------------------------------
+
+# Clean-label poisoning perturbs selected tabular features using gradient alignment.
+clean_label_rate = 0.7       
+clean_label_eps = 0.5  
+clean_label_steps = 50  
+clean_label_step_size = 0.04 
+clean_label_alpha = 0.95      
+clean_label_target_class = 0
+clean_label_source_class = -1         # -1 = choose poison/source class from selected clean-label poisons
+
+# Adaptive target/source selection for non-IID tabular clients.
+# target_mode options: fixed | adaptive | random_present | smallest_local | adaptive_smallest | multi
+# adaptive_smallest keeps class 0 when available; otherwise it chooses among the k smallest local usable classes.
+clean_label_target_mode = "adaptive_smallest"
+clean_label_target_classes = ""      # optional, e.g. "0,1,2" for multi/adaptive modes
+clean_label_local_smallest_k = 3 
+clean_label_min_target_samples = 1
+# source_mode options: mode_poison | largest_non_target | random_non_target | smallest_non_target | model_confusable | model_confusable_topk
+# model_confusable_topk evaluates all local samples, focuses on samples predicted as the target class,
+# and selects up to K classes that most often appear as the second-logit/top-2 class.
+clean_label_source_mode = "model_confusable_topk"
+clean_label_min_source_samples = 1
+clean_label_confusable_max_samples_per_class = 128
+clean_label_confusable_topk_sources = 3   # 3
+
+# Boundary-aware sample selection inside each target/source class pair.
+# random: random target/source samples; boundary: rank by cross-class probability/margin;
+# boundary_gradient: boundary prefilter followed by initial gradient-similarity ranking.
+clean_label_sample_selection_mode = "boundary_gradient"
+clean_label_target_selection_metric = "hybrid"     # hybrid | target_probability | small_margin
+clean_label_source_selection_metric = "hybrid"     # hybrid | target_probability | small_margin
+clean_label_target_reference_count = 10            # target-reference pool used independently per source class
+clean_label_reference_assignment_mode = "balanced_similarity"  # balanced_similarity | best_similarity
+# balanced_similarity: each poison uses its most similar reference while that reference has capacity;
+# when full, the poison is assigned to its next-most-similar reference. Capacities differ by at most one.
+clean_label_source_candidate_multiplier = 2.0     # prefilter this many candidates per required poison
+clean_label_gradient_max_candidates_per_source = 24  # bounds per-sample gradient-ranking cost; 0 = no cap
+
+clean_label_tabular_feature_frac = 1  
+clean_label_start_frac = 0.05           # start after the model has learned a more meaningful boundary
+clean_label_start_round = 0             # <=0 => derive from clean_label_start_frac
+clean_label_max_poison_samples = 64
+
+# ----------------------------------------------------------------------------------------------------
+# FeaturePoison1 / FeaturePoison2 / SamplePoison -----------------------------------------------------
+
+# RF-guided feature poisoning for the four supported tabular datasets.
+# FeaturePoison1 defaults to gradient-guided perturbations, with two optional
+# strategies: random_local and random_global_quantile.
+# FeaturePoison2 always uses opposite_extreme regardless of this setting.
+# SamplePoison remains a compatibility alias for FeaturePoison1.
+# Binary features and one-hot groups retain valid values in all variants.
+feature_poison_mode = "gradient"
+feature_poison_rate = 0.5                
+feature_poison_topk_frac = 0.3          
+feature_poison_feature_prob = 1.0
+feature_poison_rf_estimators = 100
+feature_poison_rf_max_samples = 512
+
+# Used only by feature_poison_mode="gradient". 1.0 moves fully to the selected bound.
+feature_poison_gradient_strength = 1.0
+
+# Used only by feature_poison_mode="random_global_quantile".
+# Global bounds are transformed with the same global scaler used by client data.
+feature_poison_global_lower_quantile = 0.05
+feature_poison_global_upper_quantile = 0.95
+feature_poison_global_clip = 8.0
+
+# "auto" detects contiguous one-hot groups from the full raw dataset.
+# Manual example for standard Covertype column order: "10-13;14-53".
+# Use "none" to disable one-hot grouping while retaining standalone binary handling.
+feature_poison_onehot_groups = "auto"
+feature_poison_onehot_min_group_size = 3
+
+feature_poison_start_frac = 0.0
+feature_poison_start_round = 0
+
+# -----------------------------------------------------------------------------------------------------------------------
+# InvertedLoss ----------------------------------------------------------------------------------------------------------
+
+# Dynamic relabeling attack inspired by inverted-loss poisoning.
+inverted_loss_rate = 0.7          
+inverted_loss_start_frac = 0.0
+inverted_loss_start_round = 0
+inverted_loss_max_poison_samples = 0         # 0 = use the full requested rate
+
+# -----------------------------------------------------------------------------------------------------------------------
+# Boundary-Aware Label Flipping -----------------------------------------------------------------------------------------
+
+# Model-guided label poisoning: for each selected sample, choose the highest-logit
+# class different from the true class (the most-confusable wrong class). The chosen
+# wrong label is frozen once at the beginning of the local training round.
+
+boundary_label_flip_rate = 0.5
+boundary_label_flip_start_frac = 0.0
+boundary_label_flip_start_round = 0
+boundary_label_flip_max_poison_samples = 0   # 0 = use the full requested rate
+
+# -----------------------------------------------------------------------------------------------------------------------
+# FedIMP ----------------------------------------------------------------------------------------------------------------
+
+# Parameter-importance model-poisoning attack (client-side).
+# IMPORTANT: `fedimp_share_across_malicious=true` uses filesystem-based sharing; it is best-effort under client sampling.
+
+fedimp_topk_ratio = 0.20
+fedimp_fisher_batches = 20
+
+fedimp_sim_batches = 8
+fedimp_sim_epochs  = 1
+fedimp_num_sims    = 60
+
+fedimp_delta_max = 1000.0
+fedimp_tau       = 1e-4
+fedimp_eps       = 0.05
+
+fedimp_prepoison_round   = 3
+fedimp_prepoison_batches = 20
+fedimp_share_across_malicious = true
+fedimp_shared_dir = "./.fedimp_shared"
+fedimp_leader_cid = "min"                  # "min" = smallest malicious id this round (best-effort)
+
+
+# ====================================================================================================================================================== #
+
+[tool.flwr.federations]
+default = "local-simulation"
+
+[tool.flwr.federations.local-simulation]
+options.num-supernodes = 100
+
+# ====================================================================================================================================================== #
+
+[tool.flwr.federations.local-simulation-gpu]
+options.num-supernodes = 100  # 100
+options.backend.client-resources.num-cpus = 4 # each ClientApp assumes to use 4CPUs
+options.backend.client-resources.num-gpus = 0.25 # at most 4 ClientApp will run in a given GPU (lower it to increase parallelism)   0.25
+
+# ====================================================================================================================================================== #
